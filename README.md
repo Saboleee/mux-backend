@@ -1384,3 +1384,6 @@ Query parameters: `userId`, `network`, `status`, `includeArchived` (default `fal
 
 <!-- handsoff-issue-990 -->
 - #990: Key management e2e
+
+<!-- handsoff-issue-1066 -->
+- #1066: Cover soroban-invoke service error paths in unit tests

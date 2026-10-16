@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { HealthController } from './health.controller';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -19,43 +20,51 @@ describe('HealthController', () => {
     controller = module.get<HealthController>(HealthController);
   });
 
-  it('should be defined', () => {
-    expect(controller).toBeDefined();
+  describe('health', () => {
+    it('returns 200 without touching the database', () => {
+      const result = controller.health();
+
+      expect(result.status).toBe('ok');
+      expect(result).toHaveProperty('build');
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
   });
 
   describe('ready', () => {
-    it('reports the database as connected on a successful ping', async () => {
+    it('returns ready when the database ping succeeds', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ '?column?': 1 }]);
+
       const result = await controller.ready();
 
-      expect(result.database.connected).toBe(true);
-      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('ready');
+      expect(result.database).toEqual({ connected: true });
     });
 
-    it('returns a non-negative responseTime derived from the measured query duration', async () => {
-      const result = await controller.ready();
-
-      expect(typeof result.database.responseTime).toBe('number');
-      expect(result.database.responseTime).toBeGreaterThanOrEqual(0);
-    });
-
-    it('reflects the actual query duration rather than a hardcoded constant', async () => {
-      const delayMs = 25;
-      prisma.$queryRaw.mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve([{ '?column?': 1 }]), delayMs)),
+    it('throws 503 when the database ping fails', async () => {
+      prisma.$queryRaw.mockRejectedValue(
+        new Error('connect ECONNREFUSED 127.0.0.1:5432'),
       );
 
-      const result = await controller.ready();
+      await expect(controller.ready()).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
 
-      expect(result.database.responseTime).toBeGreaterThanOrEqual(delayMs);
+      try {
+        await controller.ready();
+        fail('expected ready() to throw');
+      } catch (error) {
+        const exception = error as ServiceUnavailableException;
+        expect(exception.getStatus()).toBe(503);
+
+        const payload = exception.getResponse() as Record<string, any>;
+        expect(payload.status).toBe('not ready');
+        expect(payload.database).toEqual({ connected: false });
+        expect(JSON.stringify(payload)).not.toContain('ECONNREFUSED');
+        expect(payload).not.toHaveProperty('error');
+      }
     });
-
-    it('does not include responseTime in the failure path', async () => {
-      prisma.$queryRaw.mockRejectedValue(new Error('connection refused'));
-
-      const result = await controller.ready();
-
-      expect(result.database.connected).toBe(false);
-      expect(result.database).not.toHaveProperty('responseTime');
+  });
+});
     });
   });
 });
